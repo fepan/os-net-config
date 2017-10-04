@@ -401,7 +401,7 @@ dpdk {
             return None, None
         self.stubs.Set(processutils, 'execute', test_execute)
 
-        def test_get_vpp_interface_name(pci_dev):
+        def test_get_vpp_interface_name(pci_dev, tries, timeout):
             return {'name': 'GigabitEthernet0/9/0', 'index': '1'}
 
         self.stubs.Set(utils, '_get_vpp_interface',

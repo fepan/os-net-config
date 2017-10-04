@@ -320,10 +320,9 @@ def restart_vpp(vpp_interfaces):
             processutils.execute('modprobe', 'vfio-pci')
     logger.info('Restarting VPP')
     processutils.execute('systemctl', 'restart', 'vpp')
-    time.sleep(10)
 
 
-def _get_vpp_interface(pci_addr):
+def _get_vpp_interface(pci_addr, tries=1, timeout=5):
     """Get VPP interface information from a given PCI address
 
     From a running VPP instance, attempt to find the interface name from
@@ -338,34 +337,43 @@ def _get_vpp_interface(pci_addr):
                      - BB = Bus Number
                      - SS = Slot number
                      - F = Function
+    :param tries: Number of tries for getting vppctl output. Defaults to 1.
+    :param timeout: Timeout in seconds between tries. Defaults to 5.
     :return: VPP interface name and index. None if an interface is not found.
     """
     if not pci_addr:
         return None
 
-    try:
-        processutils.execute('systemctl', 'is-active', 'vpp')
-        out, err = processutils.execute('vppctl', 'show', 'interface')
-        m = re.search(r':([0-9a-fA-F]{2}):([0-9a-fA-F]{2}).([0-9a-fA-F])',
-                      pci_addr)
-        if m:
-            formatted_pci = "%x/%x/%x" % (int(m.group(1), 16),
-                                          int(m.group(2), 16),
-                                          int(m.group(3), 16))
-        else:
-            raise VppException('Invalid PCI address format: %s' % pci_addr)
+    for _ in range(tries):
+        try:
+            processutils.execute('systemctl', 'is-active', 'vpp')
+            out, err = processutils.execute('vppctl', 'show', 'interface')
+            m = re.search(r':([0-9a-fA-F]{2}):([0-9a-fA-F]{2}).([0-9a-fA-F])',
+                          pci_addr)
+            if m:
+                formatted_pci = "%x/%x/%x" % (int(m.group(1), 16),
+                                              int(m.group(2), 16),
+                                              int(m.group(3), 16))
+            else:
+                raise VppException('Invalid PCI address format: %s' % pci_addr)
 
-        m = re.search(r'^(\w+%s)\s+(\d+)' % formatted_pci, out, re.MULTILINE)
-        if m:
-            logger.debug('VPP interface found: %s' % m.group(1))
-            return {'name': m.group(1), 'index': m.group(2)}
-        else:
-            logger.debug('Interface with pci address %s not bound to VPP'
-                         % pci_addr)
-            return None
-    except processutils.ProcessExecutionError:
-        logger.debug('Interface with pci address %s not bound to vpp' %
-                     pci_addr)
+            m = re.search(r'^(\w+%s)\s+(\d+)' % formatted_pci, out,
+                          re.MULTILINE)
+            if m:
+                logger.debug('VPP interface found: %s' % m.group(1))
+                return {'name': m.group(1), 'index': m.group(2)}
+            else:
+                logger.debug('Interface with pci address %s not bound to VPP'
+                             % pci_addr)
+                return None
+        except processutils.ProcessExecutionError:
+            pass
+
+        time.sleep(timeout)
+    else:
+        logger.info('Interface with pci address %s not bound to vpp' %
+                    pci_addr)
+        return None
 
 
 def _get_vpp_bond(member_ids):
@@ -534,7 +542,8 @@ def update_vpp_mapping(vpp_interfaces, vpp_bonds):
         # only trying one more time, can turn into a retry_counter if needed
         # in the future.
         for i in range(2):
-            int_info = _get_vpp_interface(vpp_int.pci_dev)
+            int_info = _get_vpp_interface(vpp_int.pci_dev,
+                                          tries=12, timeout=5)
             if not int_info:
                 restart_vpp(vpp_interfaces)
             else:
